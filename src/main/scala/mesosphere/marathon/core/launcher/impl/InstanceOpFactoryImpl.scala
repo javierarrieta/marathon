@@ -72,7 +72,7 @@ class InstanceOpFactoryImpl(
         val (executorInfo, groupInfo, hostPorts, instanceId) = TaskGroupBuilder.build(pod, request.offer,
           Instance.Id.forRunSpec, builderConfig, runSpecTaskProc, matches.resourceMatch)
 
-        // TODO(jdef) no support for resident tasks inside pods for the MVP
+        // pods will likely never support persistent volumes
         val agentInfo = Instance.AgentInfo(request.offer)
         val taskIDs: Seq[Task.Id] = groupInfo.getTasksList.map { t => Task.Id(t.getTaskId) }(collection.breakOut)
         val instance = ephemeralPodInstance(pod, agentInfo, taskIDs, hostPorts, instanceId)
@@ -110,17 +110,20 @@ class InstanceOpFactoryImpl(
     }
   }
 
+  /**
+    * Check what to do with a given offer. If there are available reservations (instances in state Reserved) and the
+    * offer contains matching reservations & volume, then go launch on that. Otherwise, if we need to launch more
+    * instances than we have available Reservations, reserve & create volume if the offer matches.
+    */
   private[this] def inferForResidents(app: AppDefinition, request: InstanceOpFactory.Request): OfferMatchResult = {
-    val InstanceOpFactory.Request(runSpec, offer, instances, additionalLaunches) = request
+    val InstanceOpFactory.Request(runSpec, offer, _, additionalLaunches) = request
 
-    // TODO(jdef) pods should be supported some day
-
-    val needToLaunch = additionalLaunches > 0 && request.hasWaitingReservations
-    val needToReserve = request.numberOfWaitingReservations < additionalLaunches
+    // This will likely never support pods
+    val needToReserve = request.availableReservationsCount < additionalLaunches
 
     /* *
      * If an offer HAS reservations/volumes that match our run spec, handling these has precedence
-     * If an offer NAS NO reservations/volumes that match our run spec, we can reserve if needed
+     * If an offer has NO reservations/volumes that match our run spec, we can reserve if needed
      *
      * Scenario 1:
      *  We need to launch tasks and receive an offer that HAS matching reservations/volumes
@@ -133,15 +136,20 @@ class InstanceOpFactoryImpl(
      *  - schedule a ReserveAndCreate TaskOp
      */
 
-    def maybeLaunchOnReservation: Option[OfferMatchResult] = if (needToLaunch) {
-      val maybeVolumeMatch = PersistentVolumeMatcher.matchVolumes(offer, request.reserved)
+    /* If an offer contains a reservation that matches ANY of the reservations we know, we'll launch a new instance
+     * based on that. It's possible that Marathon has an instance in a state other than Reserved but receives an offer
+     * with a free reservation and a persistent volume. In that case we definitely want to use that volume instead of
+     * reserving a new one or do nothing.
+     */
+    def maybeLaunchOnReservation: Option[OfferMatchResult] = {
+      val maybeVolumeMatch = PersistentVolumeMatcher.matchVolumes(offer, request.availableReservations)
 
       maybeVolumeMatch.map { volumeMatch =>
 
         // we must not consider the volumeMatch's Reserved instance because that would lead to a violation of constraints
         // by the Reserved instance that we actually want to launch
         val instancesToConsiderForConstraints: Stream[Instance] =
-          instances.valuesIterator.toStream.filterNotAs(_.instanceId != volumeMatch.instance.instanceId)
+          request.instances.filterNotAs(_.instanceId != volumeMatch.instance.instanceId)
 
         // resources are reserved for this role, so we only consider those resources
         val rolesToConsider = config.mesosRole.get.toSet
@@ -160,7 +168,7 @@ class InstanceOpFactoryImpl(
             OfferMatchResult.NoMatch(app, request.offer, matchesNot.reasons, clock.now())
         }
       }
-    } else None
+    }
 
     def maybeReserveAndCreateVolumes: Option[OfferMatchResult] = if (needToReserve) {
       val configuredRoles = if (runSpec.acceptedResourceRoles.isEmpty) {
@@ -175,7 +183,7 @@ class InstanceOpFactoryImpl(
       }
 
       val resourceMatchResponse =
-        ResourceMatcher.matchResources(offer, runSpec, instances.valuesIterator.toStream, ResourceSelector.reservable)
+        ResourceMatcher.matchResources(offer, runSpec, request.instances, ResourceSelector.reservable)
       resourceMatchResponse match {
         case matches: ResourceMatchResponse.Match =>
           val instanceOp = reserveAndCreateVolumes(request.frameworkId, runSpec, offer, matches.resourceMatch)
@@ -312,7 +320,7 @@ object InstanceOpFactoryImpl {
       tasksMap = taskIDs.map { taskId =>
         // the task level host ports are needed for fine-grained status/reporting later on
         val taskHostPorts: Seq[Int] = taskId.containerName.map { ctName =>
-          allocPortsByCTName.withFilter{ case (name, port) => name == ctName }.map(_._2)
+          allocPortsByCTName.withFilter{ case (name, _) => name == ctName }.map(_._2)
         }.getOrElse(Seq.empty[Int])
 
         val networkInfo = NetworkInfo(agentInfo.host, taskHostPorts, ipAddresses = Nil)

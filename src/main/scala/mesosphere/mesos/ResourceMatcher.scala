@@ -130,7 +130,7 @@ object ResourceMatcher {
     * resources, the disk resources for the local volumes are included since they must become part of
     * the reservation.
     */
-  def matchResources(offer: Offer, runSpec: RunSpec, runningInstances: => Seq[Instance],
+  def matchResources(offer: Offer, runSpec: RunSpec, allInstances: => Seq[Instance],
     selector: ResourceSelector): ResourceMatchResponse = {
 
     val groupedResources: Map[Role, Seq[Protos.Resource]] = offer.getResourcesList.groupBy(_.getName).map { case (k, v) => k -> v.to[Seq] }
@@ -175,8 +175,8 @@ object ResourceMatcher {
     def portsMatchOpt: Option[PortsMatch] = PortsMatcher(runSpec, offer, selector).portsMatch
 
     val meetsAllConstraints: Boolean = {
-      lazy val instances = runningInstances.filter { inst =>
-        inst.isLaunched && inst.runSpecVersion >= runSpec.versionInfo.lastConfigChangeVersion
+      lazy val instances = allInstances.filter { inst =>
+        inst.isActive && inst.runSpecVersion >= runSpec.versionInfo.lastConfigChangeVersion
       }
       val badConstraints = runSpec.constraints.filterNot { constraint =>
         Constraints.meetsConstraint(instances, offer, constraint)

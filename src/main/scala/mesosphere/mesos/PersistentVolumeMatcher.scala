@@ -10,7 +10,7 @@ import scala.collection.immutable.Seq
 object PersistentVolumeMatcher {
   def matchVolumes(
     offer: Mesos.Offer,
-    waitingInstances: Seq[Instance]): Option[VolumeMatch] = {
+    availableInstances: Seq[Instance]): Option[VolumeMatch] = {
 
     // find all offered persistent volumes
     val availableVolumes: Map[String, Mesos.Resource] = offer.getResourcesList.collect {
@@ -25,10 +25,10 @@ object PersistentVolumeMatcher {
         None
     }
 
-    waitingInstances.toStream
+    availableInstances.toStream
       .flatMap { instance =>
         // Note this only supports AppDefinition instances with exactly one task
-        instance.tasksMap.values.headOption.flatMap(_.reservationWithVolumes).flatMap { reservation =>
+        instance.appTask.reservationWithVolumes.flatMap { reservation =>
           resourcesForReservation(reservation).flatMap(rs => Some(VolumeMatch(instance, rs)))
         }
       }.headOption

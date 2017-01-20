@@ -24,17 +24,26 @@ object InstanceOpFactory {
   /**
     * @param runSpec the related run specification definition
     * @param offer the offer to match against
-    * @param instanceMap a map of running tasks or reservations for the given run spec,
+    * @param instanceMap a map of all instances for the given run spec,
     *              needed to check constraints and handle resident tasks
     * @param additionalLaunches the number of additional launches that has been requested
     */
+  // TODO: check whether instanceMap is always passed correctly
   case class Request(runSpec: RunSpec, offer: Mesos.Offer, instanceMap: Map[Instance.Id, Instance],
       additionalLaunches: Int) {
     def frameworkId: FrameworkId = FrameworkId("").mergeFromProto(offer.getFrameworkId)
-    def instances: Seq[Instance] = instanceMap.values.to[Seq]
-    lazy val reserved: Seq[Instance] = instances.filter(_.isReserved)
-    def hasWaitingReservations: Boolean = reserved.nonEmpty
-    def numberOfWaitingReservations: Int = reserved.size
     def isForResidentRunSpec: Boolean = runSpec.residency.isDefined
+
+    lazy val instances: Stream[Instance] = instanceMap.values.to[Stream]
+
+    /**
+      * All available reservations, no matter what [[mesosphere.marathon.core.condition.Condition]] the instance is in.
+      * This is needed so that Marathon can always match against an offer with a known reservation/persistent volume
+      * and does not miss to match those because it thinks the instance is Unreachable.
+      */
+    lazy val availableReservations: Seq[Instance] = instances.filter(_.isReserved)
+
+    /** The number of instances in state Reserved, meaning they're available to be launched */
+    lazy val availableReservationsCount: Int = availableReservations.size
   }
 }

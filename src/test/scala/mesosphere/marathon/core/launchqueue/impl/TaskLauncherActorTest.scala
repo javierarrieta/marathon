@@ -198,7 +198,9 @@ class TaskLauncherActorTest extends AkkaUnitTest {
       verifyClean()
     }
 
-    "Don't pass the task factory lost tasks when asking for new tasks" in new Fixture {
+    "Pass all instances to the task factory including unreachable and reserved" in new Fixture {
+      // background: we might receive offers with reservations/volumes that are associated with
+      // unreachable instances. If we do, we do want these to be matched.
       import mesosphere.marathon.Protos.Constraint.Operator
 
       val uniqueConstraint = Protos.Constraint.newBuilder
@@ -213,7 +215,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
 
       Mockito.when(instanceTracker.instancesBySpecSync).thenReturn(InstanceTracker.InstancesBySpec.forInstances(lostInstance))
       val captor = ArgumentCaptor.forClass(classOf[InstanceOpFactory.Request])
-      // we're only interested in capturing the argument, so return value doesn't matte
+      // we're only interested in capturing the argument, so return value doesn't matter
       Mockito.when(instanceOpFactory.matchOfferRequest(captor.capture())).thenReturn(f.noMatchResult)
 
       val launcherRef = createLauncherRef(instances = 1, constraintApp)
@@ -225,7 +227,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
 
       Mockito.verify(instanceTracker).instancesBySpecSync
       Mockito.verify(instanceOpFactory).matchOfferRequest(m.any())
-      assert(captor.getValue.instanceMap.isEmpty)
+      assert(captor.getValue.instanceMap.size == 1)
       verifyClean()
     }
 
